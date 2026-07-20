@@ -451,3 +451,16 @@ def obtener_resumen_costos_orden() -> list[dict]:
     )
 
     return _obtener_datos(respuesta)
+# =========================================================
+# HISTORIAL DE VEHÍCULOS
+# =========================================================
+
+def obtener_historial_vehiculos() -> list[dict]:
+    respuesta = (
+        supabase.table("resumen_costos_orden")
+        .select("*")
+        .order("fecha_ingreso", desc=True)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
