@@ -333,3 +333,121 @@ def eliminar_servicio_orden(
     )
 
     return _obtener_datos(respuesta)
+
+
+# =========================================================
+# REPUESTOS DE LA ORDEN
+# =========================================================
+
+def obtener_repuestos_orden() -> list[dict]:
+    respuesta = (
+        supabase.table("repuestos_orden")
+        .select(
+            """
+            *,
+            ordenes_trabajo (
+                id,
+                estado,
+                fecha_ingreso,
+                vehiculos (
+                    id,
+                    placa,
+                    marca,
+                    modelo,
+                    anio,
+                    clientes (
+                        id,
+                        nombres,
+                        apellidos
+                    )
+                ),
+                tecnicos (
+                    id,
+                    nombres,
+                    apellidos
+                )
+            )
+            """
+        )
+        .order("id", desc=True)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def obtener_repuestos_por_orden(
+    orden_id: int,
+) -> list[dict]:
+    respuesta = (
+        supabase.table("repuestos_orden")
+        .select("*")
+        .eq("orden_id", orden_id)
+        .order("id", desc=False)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def crear_repuesto_orden(datos: dict) -> list[dict]:
+    respuesta = (
+        supabase.table("repuestos_orden")
+        .insert(datos)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def actualizar_repuesto_orden(
+    repuesto_id: int,
+    datos: dict,
+) -> list[dict]:
+    respuesta = (
+        supabase.table("repuestos_orden")
+        .update(datos)
+        .eq("id", repuesto_id)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def eliminar_repuesto_orden(
+    repuesto_id: int,
+) -> list[dict]:
+    respuesta = (
+        supabase.table("repuestos_orden")
+        .delete()
+        .eq("id", repuesto_id)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+# =========================================================
+# RESUMEN DE COSTOS DE LAS ÓRDENES
+# =========================================================
+
+def obtener_resumen_costos_orden() -> list[dict]:
+    respuesta = (
+        supabase.table("resumen_costos_orden")
+        .select("*")
+        .order("orden_id", desc=True)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+# =========================================================
+# RESUMEN DE COSTOS DE LAS ÓRDENES
+# =========================================================
+
+def obtener_resumen_costos_orden() -> list[dict]:
+    respuesta = (
+        supabase.table("resumen_costos_orden")
+        .select("*")
+        .order("orden_id", desc=True)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
