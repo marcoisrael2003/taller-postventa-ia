@@ -39,10 +39,6 @@ supabase: Client = create_client(
 # =========================================================
 
 def _obtener_datos(respuesta: Any) -> list[dict]:
-    """
-    Devuelve una lista segura con los datos recibidos
-    desde Supabase.
-    """
     datos = getattr(respuesta, "data", None)
 
     if datos is None:
@@ -241,6 +237,98 @@ def actualizar_orden_trabajo(
         supabase.table("ordenes_trabajo")
         .update(datos)
         .eq("id", orden_id)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+# =========================================================
+# SERVICIOS DE LA ORDEN
+# =========================================================
+
+def obtener_servicios_orden() -> list[dict]:
+    respuesta = (
+        supabase.table("servicios_orden")
+        .select(
+            """
+            *,
+            ordenes_trabajo (
+                id,
+                estado,
+                fecha_ingreso,
+                vehiculos (
+                    id,
+                    placa,
+                    marca,
+                    modelo,
+                    anio,
+                    clientes (
+                        id,
+                        nombres,
+                        apellidos
+                    )
+                ),
+                tecnicos (
+                    id,
+                    nombres,
+                    apellidos
+                )
+            )
+            """
+        )
+        .order("id", desc=True)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def obtener_servicios_por_orden(
+    orden_id: int,
+) -> list[dict]:
+    respuesta = (
+        supabase.table("servicios_orden")
+        .select("*")
+        .eq("orden_id", orden_id)
+        .order("id", desc=False)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def crear_servicio_orden(datos: dict) -> list[dict]:
+    respuesta = (
+        supabase.table("servicios_orden")
+        .insert(datos)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def actualizar_servicio_orden(
+    servicio_id: int,
+    datos: dict,
+) -> list[dict]:
+    respuesta = (
+        supabase.table("servicios_orden")
+        .update(datos)
+        .eq("id", servicio_id)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def eliminar_servicio_orden(
+    servicio_id: int,
+) -> list[dict]:
+    respuesta = (
+        supabase.table("servicios_orden")
+        .delete()
+        .eq("id", servicio_id)
         .execute()
     )
 
