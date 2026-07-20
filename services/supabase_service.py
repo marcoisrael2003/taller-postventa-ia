@@ -1,23 +1,54 @@
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
 
+# =========================================================
+# CONEXIÓN CON SUPABASE
+# =========================================================
+
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError(
-        "Faltan SUPABASE_URL o SUPABASE_KEY en el archivo .env"
+if not SUPABASE_URL:
+    raise ValueError(
+        "No se encontró SUPABASE_URL en el archivo .env."
+    )
+
+if not SUPABASE_KEY:
+    raise ValueError(
+        "No se encontró SUPABASE_KEY o SUPABASE_ANON_KEY "
+        "en el archivo .env."
     )
 
 supabase: Client = create_client(
     SUPABASE_URL,
     SUPABASE_KEY,
 )
+
+
+# =========================================================
+# FUNCIÓN AUXILIAR
+# =========================================================
+
+def _obtener_datos(respuesta: Any) -> list[dict]:
+    """
+    Devuelve una lista segura con los datos recibidos
+    desde Supabase.
+    """
+    datos = getattr(respuesta, "data", None)
+
+    if datos is None:
+        return []
+
+    return datos
 
 
 # =========================================================
@@ -32,7 +63,7 @@ def obtener_clientes() -> list[dict]:
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
 
 
 def crear_cliente(datos: dict) -> list[dict]:
@@ -42,7 +73,7 @@ def crear_cliente(datos: dict) -> list[dict]:
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
 
 
 def actualizar_cliente(
@@ -56,7 +87,7 @@ def actualizar_cliente(
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
 
 
 # =========================================================
@@ -68,21 +99,14 @@ def obtener_vehiculos() -> list[dict]:
         supabase.table("vehiculos")
         .select(
             """
-            id,
-            cliente_id,
-            placa,
-            marca,
-            modelo,
-            anio,
-            color,
-            kilometraje,
-            vin,
-            activo,
-            fecha_registro,
+            *,
             clientes (
+                id,
                 cedula,
                 nombres,
-                apellidos
+                apellidos,
+                telefono,
+                correo
             )
             """
         )
@@ -90,7 +114,7 @@ def obtener_vehiculos() -> list[dict]:
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
 
 
 def crear_vehiculo(datos: dict) -> list[dict]:
@@ -100,7 +124,7 @@ def crear_vehiculo(datos: dict) -> list[dict]:
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
 
 
 def actualizar_vehiculo(
@@ -114,74 +138,9 @@ def actualizar_vehiculo(
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
 
 
-# =========================================================
-# ÓRDENES DE TRABAJO
-# =========================================================
-
-def obtener_ordenes_trabajo() -> list[dict]:
-    respuesta = (
-        supabase.table("ordenes_trabajo")
-        .select(
-            """
-            id,
-            vehiculo_id,
-            fecha_ingreso,
-            motivo_ingreso,
-            diagnostico,
-            estado,
-            observaciones,
-            fecha_estimada_entrega,
-            fecha_entrega_real,
-            costo_estimado,
-            costo_final,
-            kilometraje_ingreso,
-            activo,
-            fecha_creacion,
-            vehiculos (
-                placa,
-                marca,
-                modelo,
-                cliente_id,
-                clientes (
-                    cedula,
-                    nombres,
-                    apellidos
-                )
-            )
-            """
-        )
-        .order("id", desc=True)
-        .execute()
-    )
-
-    return respuesta.data
-
-
-def crear_orden_trabajo(datos: dict) -> list[dict]:
-    respuesta = (
-        supabase.table("ordenes_trabajo")
-        .insert(datos)
-        .execute()
-    )
-
-    return respuesta.data
-
-
-def actualizar_orden_trabajo(
-    orden_id: int,
-    datos: dict,
-) -> list[dict]:
-    respuesta = (
-        supabase.table("ordenes_trabajo")
-        .update(datos)
-        .eq("id", orden_id)
-        .execute()
-    )
-
-    return respuesta.data
 # =========================================================
 # TÉCNICOS
 # =========================================================
@@ -194,7 +153,7 @@ def obtener_tecnicos() -> list[dict]:
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
 
 
 def crear_tecnico(datos: dict) -> list[dict]:
@@ -204,7 +163,7 @@ def crear_tecnico(datos: dict) -> list[dict]:
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
 
 
 def actualizar_tecnico(
@@ -218,4 +177,71 @@ def actualizar_tecnico(
         .execute()
     )
 
-    return respuesta.data
+    return _obtener_datos(respuesta)
+
+
+# =========================================================
+# ÓRDENES DE TRABAJO
+# =========================================================
+
+def obtener_ordenes_trabajo() -> list[dict]:
+    respuesta = (
+        supabase.table("ordenes_trabajo")
+        .select(
+            """
+            *,
+            vehiculos (
+                id,
+                placa,
+                marca,
+                modelo,
+                anio,
+                clientes (
+                    id,
+                    cedula,
+                    nombres,
+                    apellidos,
+                    telefono,
+                    correo
+                )
+            ),
+            tecnicos (
+                id,
+                cedula,
+                nombres,
+                apellidos,
+                especialidad,
+                nivel,
+                activo
+            )
+            """
+        )
+        .order("id", desc=True)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def crear_orden_trabajo(datos: dict) -> list[dict]:
+    respuesta = (
+        supabase.table("ordenes_trabajo")
+        .insert(datos)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def actualizar_orden_trabajo(
+    orden_id: int,
+    datos: dict,
+) -> list[dict]:
+    respuesta = (
+        supabase.table("ordenes_trabajo")
+        .update(datos)
+        .eq("id", orden_id)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
