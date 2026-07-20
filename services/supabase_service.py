@@ -182,3 +182,40 @@ def actualizar_orden_trabajo(
     )
 
     return respuesta.data
+# =========================================================
+# TÉCNICOS
+# =========================================================
+
+def obtener_tecnicos() -> list[dict]:
+    respuesta = (
+        supabase.table("tecnicos")
+        .select("*")
+        .order("id", desc=False)
+        .execute()
+    )
+
+    return respuesta.data
+
+
+def crear_tecnico(datos: dict) -> list[dict]:
+    respuesta = (
+        supabase.table("tecnicos")
+        .insert(datos)
+        .execute()
+    )
+
+    return respuesta.data
+
+
+def actualizar_tecnico(
+    tecnico_id: int,
+    datos: dict,
+) -> list[dict]:
+    respuesta = (
+        supabase.table("tecnicos")
+        .update(datos)
+        .eq("id", tecnico_id)
+        .execute()
+    )
+
+    return respuesta.data
