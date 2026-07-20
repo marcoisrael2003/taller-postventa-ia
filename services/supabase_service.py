@@ -464,3 +464,56 @@ def obtener_historial_vehiculos() -> list[dict]:
     )
 
     return _obtener_datos(respuesta)
+# =========================================================
+# MÓDULO DE CITAS
+# =========================================================
+
+def obtener_citas_completas():
+    respuesta = (
+        supabase.table("vista_citas_completa")
+        .select("*")
+        .order("fecha_cita")
+        .order("hora_cita")
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def actualizar_estado_cita(cita_id, estado):
+    respuesta = (
+        supabase.table("citas")
+        .update({"estado": estado})
+        .eq("id", cita_id)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
+
+
+def actualizar_cita(
+    cita_id,
+    fecha_cita,
+    hora_cita,
+    tipo_servicio,
+    motivo,
+    estado,
+    observaciones,
+):
+    respuesta = (
+        supabase.table("citas")
+        .update(
+            {
+                "fecha_cita": str(fecha_cita),
+                "hora_cita": str(hora_cita),
+                "tipo_servicio": tipo_servicio,
+                "motivo": motivo,
+                "estado": estado,
+                "observaciones": observaciones,
+            }
+        )
+        .eq("id", cita_id)
+        .execute()
+    )
+
+    return _obtener_datos(respuesta)
