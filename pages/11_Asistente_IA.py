@@ -5,1288 +5,579 @@ import unicodedata
 
 import streamlit as st
 from openai import OpenAI
-from supabase import create_client
 
 from services.supabase_service import (
+    obtener_citas_completas,
+    obtener_clientes,
     obtener_ordenes_trabajo,
+    obtener_repuestos_orden,
+    obtener_servicios_orden,
     obtener_tecnicos,
     obtener_vehiculos,
 )
 
-
-# =========================================================
-# CONFIGURACIÓN DE LA PÁGINA
-# =========================================================
-
-st.set_page_config(
-    page_title="Asistente IA",
-    page_icon="🤖",
-    layout="wide",
-)
-
+st.set_page_config(page_title="Asistente IA", page_icon="🤖", layout="wide")
 st.title("🤖 Asistente Inteligente del Taller")
-
-st.caption(
-    "Consulta información almacenada en Supabase o realiza "
-    "preguntas técnicas sobre mantenimiento automotriz."
-)
-
-st.info(
-    "Ejemplos: ¿Quién tiene más órdenes?, ¿cuántos técnicos hay?, "
-    "¿qué citas existen?, ¿qué significa el código P0300?"
-)
+st.caption("Consulta datos reales de Supabase y realiza preguntas técnicas automotrices.")
 
 
-# =========================================================
-# CONEXIONES
-# =========================================================
-
-try:
-    supabase = create_client(
-        st.secrets["SUPABASE_URL"],
-        st.secrets["SUPABASE_KEY"],
-    )
-
-except KeyError as error:
-    st.error(
-        "Falta configurar una credencial de Supabase en "
-        f"Streamlit Secrets: {error}"
-    )
-    st.stop()
-
-except Exception as error:
-    st.error(
-        "No fue posible conectar con Supabase. "
-        f"Detalle: {error}"
-    )
-    st.stop()
+def normalizar(texto):
+    texto = unicodedata.normalize("NFD", str(texto).lower().strip())
+    return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
 
-try:
-    cliente_ia = OpenAI(
-        api_key=st.secrets["OPENROUTER_API_KEY"],
-        base_url="https://openrouter.ai/api/v1",
-        default_headers={
-            "HTTP-Referer": (
-                "https://asistente-ia-mantenimiento-automotriz."
-                "streamlit.app"
-            ),
-            "X-OpenRouter-Title": "Taller Postventa IA",
-        },
-    )
-
-except KeyError:
-    cliente_ia = None
-
-except Exception:
-    cliente_ia = None
+def contiene(texto, opciones):
+    return any(opcion in texto for opcion in opciones)
 
 
-# =========================================================
-# FUNCIONES AUXILIARES
-# =========================================================
-
-def normalizar_texto(texto: str) -> str:
-    """
-    Convierte el texto a minúsculas y elimina tildes.
-    """
-    texto = texto.lower().strip()
-
-    texto = unicodedata.normalize(
-        "NFD",
-        texto,
-    )
-
-    texto = "".join(
-        caracter
-        for caracter in texto
-        if unicodedata.category(caracter) != "Mn"
-    )
-
-    return texto
+def nombre_persona(registro):
+    registro = registro or {}
+    nombre = f"{registro.get('nombres', '')} {registro.get('apellidos', '')}".strip()
+    return nombre or "Sin nombre registrado"
 
 
-def obtener_nombre_persona(registro: dict | None) -> str:
-    """
-    Construye el nombre completo de clientes o técnicos.
-    """
-    if not registro:
-        return "Sin nombre"
-
-    nombres = (
-        registro.get("nombres")
-        or registro.get("nombre")
-        or ""
-    )
-
-    apellidos = (
-        registro.get("apellidos")
-        or registro.get("apellido")
-        or ""
-    )
-
-    nombre_completo = f"{nombres} {apellidos}".strip()
-
-    return nombre_completo or "Sin nombre"
+def placa_normalizada(placa):
+    return re.sub(r"[^A-Z0-9]", "", str(placa or "").upper())
 
 
-def consultar_tabla(
-    nombre_tabla: str,
-    limite: int = 500,
-) -> list:
-    """
-    Consulta directamente una tabla de Supabase.
-    Si la tabla no existe o ocurre un error, devuelve [].
-    """
+def numero(valor, defecto=0):
     try:
-        respuesta = (
-            supabase
-            .table(nombre_tabla)
-            .select("*")
-            .limit(limite)
-            .execute()
-        )
+        return float(valor or defecto)
+    except (TypeError, ValueError):
+        return float(defecto)
 
-        return respuesta.data or []
-
-    except Exception:
-        return []
-
-
-def coincide_con_nombre(
-    pregunta_normalizada: str,
-    nombre: str,
-) -> bool:
-    """
-    Comprueba si un nombre completo o uno de sus componentes
-    aparece dentro de la pregunta.
-    """
-    nombre_normalizado = normalizar_texto(nombre)
-
-    if nombre_normalizado in pregunta_normalizada:
-        return True
-
-    partes = [
-        parte
-        for parte in nombre_normalizado.split()
-        if len(parte) >= 3
-    ]
-
-    return bool(partes) and all(
-        parte in pregunta_normalizada
-        for parte in partes
-    )
-
-
-# =========================================================
-# CARGA DE INFORMACIÓN
-# =========================================================
 
 @st.cache_data(ttl=30)
-def cargar_datos_taller() -> dict:
-    """
-    Obtiene los datos principales del taller.
-    """
-    try:
-        tecnicos = obtener_tecnicos()
-    except Exception:
-        tecnicos = []
-
-    try:
-        ordenes = obtener_ordenes_trabajo()
-    except Exception:
-        ordenes = []
-
-    try:
-        vehiculos = obtener_vehiculos()
-    except Exception:
-        vehiculos = []
-
-    clientes = consultar_tabla("clientes")
-    citas = consultar_tabla("citas")
-    servicios = consultar_tabla("servicios_orden")
-    repuestos = consultar_tabla("repuestos_orden")
-
-    return {
-        "clientes": clientes,
-        "vehiculos": vehiculos,
-        "tecnicos": tecnicos,
-        "ordenes": ordenes,
-        "citas": citas,
-        "servicios": servicios,
-        "repuestos": repuestos,
+def cargar_datos():
+    datos = {}
+    funciones = {
+        "clientes": obtener_clientes,
+        "vehiculos": obtener_vehiculos,
+        "tecnicos": obtener_tecnicos,
+        "ordenes": obtener_ordenes_trabajo,
+        "citas": obtener_citas_completas,
+        "servicios": obtener_servicios_orden,
+        "repuestos": obtener_repuestos_orden,
     }
 
+    errores = []
+    for clave, funcion in funciones.items():
+        try:
+            datos[clave] = funcion()
+        except Exception as error:
+            datos[clave] = []
+            errores.append(f"{clave}: {error}")
 
-# =========================================================
-# CONSULTAS DE CANTIDADES
-# =========================================================
+    datos["errores"] = errores
+    return datos
 
-def responder_cantidades(
-    datos: dict,
-    pregunta: str,
-):
-    texto = normalizar_texto(pregunta)
 
-    expresiones_cantidad = [
-        "cuantos",
-        "cuantas",
-        "cantidad",
-        "numero de",
-        "total de",
-    ]
+def responder_cantidades(datos, pregunta):
+    texto = normalizar(pregunta)
 
-    if not any(
-        expresion in texto
-        for expresion in expresiones_cantidad
+    if not contiene(
+        texto,
+        ["cuanto", "cuantos", "cuanta", "cuantas", "cantidad", "total", "tenemos", "existen", "hay"],
     ):
         return None
 
-    opciones = [
-        (
-            ["cliente", "clientes"],
-            "clientes",
-            "clientes",
-        ),
-        (
-            ["vehiculo", "vehiculos"],
-            "vehiculos",
-            "vehículos",
-        ),
-        (
-            ["tecnico", "tecnicos"],
-            "tecnicos",
-            "técnicos",
-        ),
-        (
-            ["orden", "ordenes"],
-            "ordenes",
-            "órdenes de trabajo",
-        ),
-        (
-            ["cita", "citas"],
-            "citas",
-            "citas",
-        ),
-        (
-            ["servicio", "servicios"],
-            "servicios",
-            "servicios por orden",
-        ),
-        (
-            ["repuesto", "repuestos"],
-            "repuestos",
-            "repuestos por orden",
-        ),
-    ]
+    if contiene(texto, ["vehiculo", "carro", "auto"]):
+        vehiculos = datos["vehiculos"]
+        activos = [v for v in vehiculos if v.get("activo", True)]
+        return (
+            f"Actualmente existen **{len(vehiculos)} vehículos registrados**.\n\n"
+            f"- Activos: **{len(activos)}**\n"
+            f"- Inactivos: **{len(vehiculos) - len(activos)}**"
+        )
 
-    for palabras, clave, etiqueta in opciones:
-        if any(palabra in texto for palabra in palabras):
-            cantidad = len(datos.get(clave, []))
+    if "cliente" in texto:
+        return f"Actualmente existen **{len(datos['clientes'])} clientes registrados**."
 
-            return (
-                f"Actualmente existen **{cantidad} "
-                f"{etiqueta}** registrados en la base "
-                f"de datos del taller."
-            )
+    if "tecnico" in texto:
+        return f"Actualmente existen **{len(datos['tecnicos'])} técnicos registrados**."
+
+    if "orden" in texto:
+        return f"Actualmente existen **{len(datos['ordenes'])} órdenes registradas**."
+
+    if "cita" in texto:
+        return f"Actualmente existen **{len(datos['citas'])} citas registradas**."
+
+    if "servicio" in texto:
+        return f"Actualmente existen **{len(datos['servicios'])} servicios registrados**."
+
+    if "repuesto" in texto:
+        return f"Actualmente existen **{len(datos['repuestos'])} repuestos registrados**."
 
     return None
 
 
-# =========================================================
-# CONSULTAS DE TÉCNICOS
-# =========================================================
+def responder_vehiculos(datos, pregunta):
+    texto = normalizar(pregunta)
+    vehiculos = datos["vehiculos"]
 
-def responder_tecnicos(
-    datos: dict,
-    pregunta: str,
-):
-    texto = normalizar_texto(pregunta)
+    marcas = sorted({
+        normalizar(v.get("marca", ""))
+        for v in vehiculos
+        if v.get("marca")
+    })
+    modelos = sorted({
+        normalizar(v.get("modelo", ""))
+        for v in vehiculos
+        if v.get("modelo")
+    })
+    colores = sorted({
+        normalizar(v.get("color", ""))
+        for v in vehiculos
+        if v.get("color")
+    })
 
+    relacionado = (
+        contiene(
+            texto,
+            [
+                "vehiculo", "carro", "auto", "placa", "marca", "modelo",
+                "kilometraje", "color", "anio", "antiguo", "nuevo",
+            ],
+        )
+        or any(marca in texto for marca in marcas)
+        or any(modelo in texto for modelo in modelos)
+        or any(color in texto for color in colores)
+    )
+
+    if not relacionado:
+        return None
+
+    if not vehiculos:
+        return "No existen vehículos registrados."
+
+    patron_placa = re.search(r"\b[A-Z]{3,4}[-\s]?\d{3,4}\b", pregunta.upper())
+    if patron_placa:
+        buscada = placa_normalizada(patron_placa.group(0))
+        vehiculo = next(
+            (v for v in vehiculos if placa_normalizada(v.get("placa")) == buscada),
+            None,
+        )
+
+        if not vehiculo:
+            return f"No se encontró un vehículo con la placa **{patron_placa.group(0)}**."
+
+        cliente = vehiculo.get("clientes") or {}
+        return (
+            f"### Vehículo {vehiculo.get('placa')}\n\n"
+            f"- **Marca:** {vehiculo.get('marca') or 'No registrada'}\n"
+            f"- **Modelo:** {vehiculo.get('modelo') or 'No registrado'}\n"
+            f"- **Año:** {vehiculo.get('anio') or 'No registrado'}\n"
+            f"- **Color:** {vehiculo.get('color') or 'No registrado'}\n"
+            f"- **Kilometraje:** {int(numero(vehiculo.get('kilometraje')))} km\n"
+            f"- **VIN:** {vehiculo.get('vin') or 'No registrado'}\n"
+            f"- **Propietario:** {nombre_persona(cliente)}\n"
+            f"- **Cédula:** {cliente.get('cedula') or 'No registrada'}\n"
+            f"- **Estado:** {'Activo' if vehiculo.get('activo', True) else 'Inactivo'}"
+        )
+
+    marca = next(
+        (m for m in marcas if re.search(rf"\b{re.escape(m)}\b", texto)),
+        None,
+    )
+    if marca:
+        encontrados = [
+            v for v in vehiculos
+            if normalizar(v.get("marca", "")) == marca
+        ]
+        nombre_marca = encontrados[0].get("marca") if encontrados else marca.title()
+
+        if contiene(texto, ["cuanto", "cuantos", "cantidad", "total", "hay", "tenemos"]):
+            return (
+                f"Hay **{len(encontrados)} vehículo(s) de la marca "
+                f"{nombre_marca}** registrados."
+            )
+
+        lineas = [
+            f"- **{v.get('placa')}** — {v.get('marca')} {v.get('modelo')} "
+            f"{v.get('anio')}; propietario: {nombre_persona(v.get('clientes'))}."
+            for v in encontrados
+        ]
+        return f"Vehículos {nombre_marca}:\n\n" + "\n".join(lineas)
+
+    modelo = next(
+        (m for m in modelos if re.search(rf"\b{re.escape(m)}\b", texto)),
+        None,
+    )
+    if modelo:
+        encontrados = [
+            v for v in vehiculos
+            if normalizar(v.get("modelo", "")) == modelo
+        ]
+        if contiene(texto, ["cuanto", "cuantos", "cantidad", "hay", "tenemos"]):
+            return f"Hay **{len(encontrados)} vehículo(s) del modelo {modelo.title()}**."
+
+        lineas = [
+            f"- **{v.get('placa')}** — {v.get('marca')} {v.get('modelo')} {v.get('anio')}."
+            for v in encontrados
+        ]
+        return "Vehículos encontrados:\n\n" + "\n".join(lineas)
+
+    if contiene(texto, ["por marca", "cada marca", "cantidad por marca"]):
+        conteo = Counter(v.get("marca") or "Sin marca" for v in vehiculos)
+        return "### Vehículos por marca\n\n" + "\n".join(
+            f"- **{marca}:** {cantidad}"
+            for marca, cantidad in conteo.most_common()
+        )
+
+    if contiene(texto, ["marca mas frecuente", "marca mas registrada", "marca predominante"]):
+        marca_frecuente, cantidad = Counter(
+            v.get("marca") or "Sin marca" for v in vehiculos
+        ).most_common(1)[0]
+        return (
+            f"La marca más frecuente es **{marca_frecuente}**, "
+            f"con **{cantidad} vehículo(s)**."
+        )
+
+    patron_anio = re.search(r"\b(19|20)\d{2}\b", texto)
+    if patron_anio:
+        anio = int(patron_anio.group(0))
+        encontrados = [v for v in vehiculos if int(v.get("anio") or 0) == anio]
+
+        if contiene(texto, ["cuanto", "cuantos", "cantidad", "hay", "tenemos"]):
+            return f"Hay **{len(encontrados)} vehículo(s) del año {anio}**."
+
+        if not encontrados:
+            return f"No existen vehículos del año **{anio}**."
+
+        return f"Vehículos del año **{anio}**:\n\n" + "\n".join(
+            f"- **{v.get('placa')}** — {v.get('marca')} {v.get('modelo')}."
+            for v in encontrados
+        )
+
+    color = next(
+        (c for c in colores if re.search(rf"\b{re.escape(c)}\b", texto)),
+        None,
+    )
+    if color:
+        encontrados = [
+            v for v in vehiculos
+            if normalizar(v.get("color", "")) == color
+        ]
+
+        if contiene(texto, ["cuanto", "cuantos", "cantidad", "hay", "tenemos"]):
+            return f"Hay **{len(encontrados)} vehículo(s) de color {color.title()}**."
+
+        return f"Vehículos de color **{color.title()}**:\n\n" + "\n".join(
+            f"- **{v.get('placa')}** — {v.get('marca')} {v.get('modelo')} {v.get('anio')}."
+            for v in encontrados
+        )
+
+    if contiene(texto, ["mayor kilometraje", "mas kilometraje", "mas recorrido"]):
+        vehiculo = max(vehiculos, key=lambda v: numero(v.get("kilometraje")))
+        return (
+            f"El vehículo con mayor kilometraje es **{vehiculo.get('placa')}**, "
+            f"{vehiculo.get('marca')} {vehiculo.get('modelo')} "
+            f"{vehiculo.get('anio')}, con "
+            f"**{int(numero(vehiculo.get('kilometraje')))} km**."
+        )
+
+    if contiene(texto, ["menor kilometraje", "menos kilometraje", "menos recorrido"]):
+        vehiculo = min(vehiculos, key=lambda v: numero(v.get("kilometraje")))
+        return (
+            f"El vehículo con menor kilometraje es **{vehiculo.get('placa')}**, "
+            f"{vehiculo.get('marca')} {vehiculo.get('modelo')} "
+            f"{vehiculo.get('anio')}, con "
+            f"**{int(numero(vehiculo.get('kilometraje')))} km**."
+        )
+
+    if contiene(texto, ["mas antiguo", "vehiculo antiguo"]):
+        vehiculo = min(vehiculos, key=lambda v: int(v.get("anio") or 9999))
+        return (
+            f"El vehículo más antiguo es **{vehiculo.get('placa')}**, "
+            f"{vehiculo.get('marca')} {vehiculo.get('modelo')}, "
+            f"año **{vehiculo.get('anio')}**."
+        )
+
+    if contiene(texto, ["mas nuevo", "vehiculo nuevo", "mas reciente"]):
+        vehiculo = max(vehiculos, key=lambda v: int(v.get("anio") or 0))
+        return (
+            f"El vehículo más nuevo es **{vehiculo.get('placa')}**, "
+            f"{vehiculo.get('marca')} {vehiculo.get('modelo')}, "
+            f"año **{vehiculo.get('anio')}**."
+        )
+
+    if contiene(
+        texto,
+        [
+            "que vehiculos", "cuales vehiculos", "lista de vehiculos",
+            "mostrar vehiculos", "vehiculos registrados", "todos los vehiculos",
+        ],
+    ):
+        lineas = [
+            f"- **{v.get('placa')}** — {v.get('marca')} {v.get('modelo')} "
+            f"{v.get('anio')}; propietario: {nombre_persona(v.get('clientes'))}; "
+            f"kilometraje: {int(numero(v.get('kilometraje')))} km."
+            for v in vehiculos
+        ]
+        return f"Se encontraron **{len(vehiculos)} vehículos**:\n\n" + "\n".join(lineas)
+
+    return None
+
+
+def responder_tecnicos(datos, pregunta):
+    texto = normalizar(pregunta)
     if "tecnico" not in texto:
         return None
 
     tecnicos = datos["tecnicos"]
     ordenes = datos["ordenes"]
 
-    if not tecnicos:
-        return (
-            "No se encontraron técnicos registrados en "
-            "la base de datos."
+    if contiene(texto, ["mas orden", "mayor carga", "mas trabajo"]):
+        conteo = Counter(
+            str(o.get("tecnico_id"))
+            for o in ordenes
+            if o.get("tecnico_id") is not None
         )
-
-    # -----------------------------------------------------
-    # Técnico con más órdenes asignadas
-    # -----------------------------------------------------
-
-    expresiones_mayor_carga = [
-        "mas orden",
-        "mayor carga",
-        "mas trabajo",
-        "mas ordenes asignadas",
-        "mayor numero de orden",
-    ]
-
-    if any(
-        expresion in texto
-        for expresion in expresiones_mayor_carga
-    ):
-        conteo = Counter()
-
-        for orden in ordenes:
-            tecnico_id = orden.get("tecnico_id")
-
-            if tecnico_id is not None:
-                conteo[str(tecnico_id)] += 1
 
         if not conteo:
-            return (
-                "Actualmente no existen órdenes de trabajo "
-                "asignadas a técnicos."
-            )
+            return "No existen órdenes asignadas a técnicos."
 
-        mayor_cantidad = max(conteo.values())
+        mayor = max(conteo.values())
+        ids = [i for i, cantidad in conteo.items() if cantidad == mayor]
+        lineas = []
 
-        ids_mayor_carga = [
-            tecnico_id
-            for tecnico_id, cantidad in conteo.items()
-            if cantidad == mayor_cantidad
-        ]
-
-        resultados = []
-
-        for tecnico_id in ids_mayor_carga:
+        for tecnico_id in ids:
             tecnico = next(
-                (
-                    item
-                    for item in tecnicos
-                    if str(item.get("id")) == tecnico_id
-                ),
+                (t for t in tecnicos if str(t.get("id")) == tecnico_id),
                 None,
             )
-
             if tecnico:
-                nombre = obtener_nombre_persona(tecnico)
-
-                especialidad = (
-                    tecnico.get("especialidad")
-                    or "No registrada"
+                lineas.append(
+                    f"- **{nombre_persona(tecnico)}** — {mayor} órdenes."
                 )
 
-                cargo = (
-                    tecnico.get("cargo")
-                    or "No registrado"
-                )
+        return "Técnico(s) con más órdenes:\n\n" + "\n".join(lineas)
 
-                ordenes_tecnico = [
-                    orden
-                    for orden in ordenes
-                    if str(orden.get("tecnico_id"))
-                    == tecnico_id
-                ]
-
-                estados = Counter(
-                    orden.get("estado") or "Sin estado"
-                    for orden in ordenes_tecnico
-                )
-
-                detalle_estados = "\n".join(
-                    f"  - {estado}: **{cantidad}**"
-                    for estado, cantidad in estados.items()
-                )
-
-                resultados.append(
-                    f"### {nombre}\n"
-                    f"- **Órdenes asignadas:** {mayor_cantidad}\n"
-                    f"- **Cargo:** {cargo}\n"
-                    f"- **Especialidad:** {especialidad}\n"
-                    f"- **Distribución por estado:**\n"
-                    f"{detalle_estados}"
-                )
-
-            else:
-                resultados.append(
-                    f"El técnico con ID **{tecnico_id}** "
-                    f"tiene **{mayor_cantidad} órdenes**, "
-                    f"pero no se encontró su registro."
-                )
-
-        if len(resultados) == 1:
-            return (
-                "El técnico con más órdenes de trabajo "
-                "asignadas es:\n\n"
-                + resultados[0]
-            )
-
-        return (
-            "Existe un empate entre los técnicos con mayor "
-            "cantidad de órdenes asignadas:\n\n"
-            + "\n\n".join(resultados)
+    if contiene(texto, ["lista de tecnicos", "que tecnicos", "todos los tecnicos"]):
+        return f"Se encontraron **{len(tecnicos)} técnicos**:\n\n" + "\n".join(
+            f"- **{nombre_persona(t)}** — "
+            f"{t.get('especialidad') or 'Sin especialidad'}."
+            for t in tecnicos
         )
-
-    # -----------------------------------------------------
-    # Lista de técnicos y carga de trabajo
-    # -----------------------------------------------------
-
-    expresiones_lista = [
-        "que tecnicos",
-        "cuales tecnicos",
-        "lista de tecnicos",
-        "tecnicos trabajan",
-        "mostrar tecnicos",
-        "todos los tecnicos",
-        "cada tecnico",
-    ]
-
-    if any(
-        expresion in texto
-        for expresion in expresiones_lista
-    ):
-        lineas = []
-
-        for tecnico in tecnicos:
-            tecnico_id = tecnico.get("id")
-            nombre = obtener_nombre_persona(tecnico)
-
-            especialidad = (
-                tecnico.get("especialidad")
-                or "No registrada"
-            )
-
-            cargo = (
-                tecnico.get("cargo")
-                or "No registrado"
-            )
-
-            activo = tecnico.get("activo", True)
-
-            estado = (
-                "Activo"
-                if activo
-                else "Inactivo"
-            )
-
-            total_ordenes = sum(
-                1
-                for orden in ordenes
-                if str(orden.get("tecnico_id"))
-                == str(tecnico_id)
-            )
-
-            ordenes_activas = sum(
-                1
-                for orden in ordenes
-                if (
-                    str(orden.get("tecnico_id"))
-                    == str(tecnico_id)
-                    and orden.get("estado")
-                    not in [
-                        "Finalizada",
-                        "Entregada",
-                        "Cancelada",
-                    ]
-                )
-            )
-
-            lineas.append(
-                f"- **{nombre}** — {cargo}; "
-                f"especialidad: {especialidad}; "
-                f"estado: {estado}; "
-                f"órdenes totales: {total_ordenes}; "
-                f"órdenes activas: {ordenes_activas}."
-            )
-
-        return (
-            f"Se encontraron **{len(tecnicos)} técnicos** "
-            f"registrados:\n\n"
-            + "\n".join(lineas)
-        )
-
-    # -----------------------------------------------------
-    # Técnico con menor carga de trabajo
-    # -----------------------------------------------------
-
-    if (
-        "menos orden" in texto
-        or "menor carga" in texto
-        or "mas disponible" in texto
-        or "tecnico disponible" in texto
-    ):
-        cargas = []
-
-        for tecnico in tecnicos:
-            if not tecnico.get("activo", True):
-                continue
-
-            tecnico_id = tecnico.get("id")
-
-            ordenes_activas = sum(
-                1
-                for orden in ordenes
-                if (
-                    str(orden.get("tecnico_id"))
-                    == str(tecnico_id)
-                    and orden.get("estado")
-                    not in [
-                        "Finalizada",
-                        "Entregada",
-                        "Cancelada",
-                    ]
-                )
-            )
-
-            cargas.append(
-                (
-                    ordenes_activas,
-                    tecnico,
-                )
-            )
-
-        if not cargas:
-            return (
-                "No existen técnicos activos disponibles "
-                "para analizar."
-            )
-
-        menor_carga = min(
-            cantidad
-            for cantidad, _ in cargas
-        )
-
-        tecnicos_disponibles = [
-            tecnico
-            for cantidad, tecnico in cargas
-            if cantidad == menor_carga
-        ]
-
-        lineas = []
-
-        for tecnico in tecnicos_disponibles:
-            nombre = obtener_nombre_persona(tecnico)
-
-            especialidad = (
-                tecnico.get("especialidad")
-                or "No registrada"
-            )
-
-            lineas.append(
-                f"- **{nombre}** — {especialidad}; "
-                f"órdenes activas: **{menor_carga}**."
-            )
-
-        return (
-            "El técnico o los técnicos con menor carga "
-            "de trabajo son:\n\n"
-            + "\n".join(lineas)
-        )
-
-    # -----------------------------------------------------
-    # Buscar técnico por nombre
-    # -----------------------------------------------------
-
-    for tecnico in tecnicos:
-        nombre = obtener_nombre_persona(tecnico)
-
-        if coincide_con_nombre(texto, nombre):
-            tecnico_id = tecnico.get("id")
-
-            especialidad = (
-                tecnico.get("especialidad")
-                or "No registrada"
-            )
-
-            cargo = (
-                tecnico.get("cargo")
-                or "No registrado"
-            )
-
-            activo = tecnico.get("activo", True)
-
-            total_ordenes = sum(
-                1
-                for orden in ordenes
-                if str(orden.get("tecnico_id"))
-                == str(tecnico_id)
-            )
-
-            ordenes_activas = [
-                orden
-                for orden in ordenes
-                if (
-                    str(orden.get("tecnico_id"))
-                    == str(tecnico_id)
-                    and orden.get("estado")
-                    not in [
-                        "Finalizada",
-                        "Entregada",
-                        "Cancelada",
-                    ]
-                )
-            ]
-
-            detalle_ordenes = ""
-
-            if ordenes_activas:
-                lineas = []
-
-                for orden in ordenes_activas[:10]:
-                    codigo = orden.get("id")
-                    estado = (
-                        orden.get("estado")
-                        or "Sin estado"
-                    )
-
-                    vehiculo = (
-                        orden.get("vehiculos")
-                        or {}
-                    )
-
-                    placa = (
-                        vehiculo.get("placa")
-                        or "Sin placa"
-                    )
-
-                    lineas.append(
-                        f"- OT-{int(codigo):05d} — "
-                        f"{placa} — {estado}"
-                        if isinstance(codigo, int)
-                        else (
-                            f"- Orden {codigo} — "
-                            f"{placa} — {estado}"
-                        )
-                    )
-
-                detalle_ordenes = (
-                    "\n\n**Órdenes activas:**\n"
-                    + "\n".join(lineas)
-                )
-
-            return (
-                f"### Información de {nombre}\n\n"
-                f"- **Cargo:** {cargo}\n"
-                f"- **Especialidad:** {especialidad}\n"
-                f"- **Estado:** "
-                f"{'Activo' if activo else 'Inactivo'}\n"
-                f"- **Total de órdenes asignadas:** "
-                f"{total_ordenes}\n"
-                f"- **Órdenes activas:** "
-                f"{len(ordenes_activas)}"
-                f"{detalle_ordenes}"
-            )
 
     return None
 
 
-# =========================================================
-# CONSULTAS DE ÓRDENES
-# =========================================================
-
-def responder_ordenes(
-    datos: dict,
-    pregunta: str,
-):
-    texto = normalizar_texto(pregunta)
-
+def responder_ordenes(datos, pregunta):
+    texto = normalizar(pregunta)
     if "orden" not in texto:
         return None
 
     ordenes = datos["ordenes"]
+    estados = [
+        "pendiente",
+        "diagnostico",
+        "en proceso",
+        "finalizada",
+        "entregada",
+        "cancelada",
+    ]
 
-    if not ordenes:
-        return (
-            "No existen órdenes de trabajo registradas "
-            "en la base de datos."
-        )
-
-    estados_validos = {
-        "pendiente": "Pendiente",
-        "diagnostico": "Diagnóstico",
-        "en proceso": "En proceso",
-        "proceso": "En proceso",
-        "espera de repuestos": "En espera de repuestos",
-        "finalizada": "Finalizada",
-        "finalizadas": "Finalizada",
-        "entregada": "Entregada",
-        "entregadas": "Entregada",
-        "cancelada": "Cancelada",
-        "canceladas": "Cancelada",
-    }
-
-    for expresion, estado_real in estados_validos.items():
-        if expresion in texto:
-            encontradas = [
-                orden
+    for estado in estados:
+        if estado in texto:
+            cantidad = sum(
+                1
                 for orden in ordenes
-                if orden.get("estado") == estado_real
-            ]
-
-            return (
-                f"Actualmente existen **{len(encontradas)} "
-                f"órdenes** con estado **{estado_real}**."
+                if normalizar(orden.get("estado", "")) == estado
             )
+            return f"Existen **{cantidad} órdenes** con estado **{estado.title()}**."
 
-    if (
-        "sin tecnico" in texto
-        or "no asignada" in texto
-        or "no asignadas" in texto
-    ):
-        sin_tecnico = [
-            orden
-            for orden in ordenes
-            if orden.get("tecnico_id") is None
-        ]
-
-        return (
-            f"Actualmente existen **{len(sin_tecnico)} "
-            f"órdenes sin técnico asignado**."
-        )
-
-    patron_orden = re.search(
-        r"(?:ot[-\s]?|orden(?:\s+numero)?\s*)"
-        r"(\d+)",
-        texto,
-    )
-
-    if patron_orden:
-        orden_id = int(patron_orden.group(1))
-
-        orden = next(
-            (
-                item
-                for item in ordenes
-                if item.get("id") == orden_id
-            ),
-            None,
-        )
-
-        if not orden:
-            return (
-                f"No se encontró la orden de trabajo "
-                f"**OT-{orden_id:05d}**."
-            )
-
-        vehiculo = orden.get("vehiculos") or {}
-        tecnico = orden.get("tecnicos") or {}
-
-        placa = (
-            vehiculo.get("placa")
-            or "Sin placa"
-        )
-
-        descripcion_vehiculo = " ".join(
-            (
-                f'{vehiculo.get("marca", "")} '
-                f'{vehiculo.get("modelo", "")} '
-                f'{vehiculo.get("anio", "")}'
-            ).split()
-        )
-
-        nombre_tecnico = obtener_nombre_persona(
-            tecnico
-        )
-
-        return (
-            f"### Orden OT-{orden_id:05d}\n\n"
-            f"- **Vehículo:** {placa} — "
-            f"{descripcion_vehiculo}\n"
-            f"- **Técnico:** {nombre_tecnico}\n"
-            f"- **Estado:** "
-            f"{orden.get('estado') or 'Sin estado'}\n"
-            f"- **Motivo de ingreso:** "
-            f"{orden.get('motivo_ingreso') or 'No registrado'}\n"
-            f"- **Diagnóstico:** "
-            f"{orden.get('diagnostico') or 'No registrado'}\n"
-            f"- **Fecha de ingreso:** "
-            f"{orden.get('fecha_ingreso') or 'No registrada'}\n"
-            f"- **Costo estimado:** "
-            f"${float(orden.get('costo_estimado') or 0):,.2f}\n"
-            f"- **Costo final:** "
-            f"${float(orden.get('costo_final') or 0):,.2f}"
-        )
+    if contiene(texto, ["sin tecnico", "sin asignar"]):
+        cantidad = sum(1 for orden in ordenes if orden.get("tecnico_id") is None)
+        return f"Existen **{cantidad} órdenes sin técnico asignado**."
 
     return None
 
 
-# =========================================================
-# CONSULTAS DE CITAS
-# =========================================================
-
-def responder_citas(
-    datos: dict,
-    pregunta: str,
-):
-    texto = normalizar_texto(pregunta)
-
+def responder_citas(datos, pregunta):
+    texto = normalizar(pregunta)
     if "cita" not in texto:
         return None
 
     citas = datos["citas"]
 
-    if not citas:
-        return (
-            "No existen citas registradas en la base "
-            "de datos."
-        )
-
-    if "manana" in texto:
-        fecha_buscada = date.today() + timedelta(days=1)
-
-    elif "hoy" in texto:
-        fecha_buscada = date.today()
-
+    if "hoy" in texto:
+        fecha = date.today()
+    elif "manana" in texto:
+        fecha = date.today() + timedelta(days=1)
     else:
-        fecha_buscada = None
+        return f"Actualmente existen **{len(citas)} citas registradas**."
 
-    if fecha_buscada is None:
-        return (
-            f"Actualmente existen **{len(citas)} citas** "
-            f"registradas en el sistema."
-        )
+    encontradas = [
+        cita
+        for cita in citas
+        if str(cita.get("fecha_cita", "")).startswith(fecha.isoformat())
+    ]
 
-    citas_encontradas = []
+    if not encontradas:
+        return f"No existen citas para el **{fecha.strftime('%d/%m/%Y')}**."
 
-    for cita in citas:
-        fecha = (
-            cita.get("fecha_cita")
-            or cita.get("fecha")
-            or cita.get("fecha_hora")
-            or ""
-        )
-
-        if str(fecha).startswith(
-            fecha_buscada.isoformat()
-        ):
-            citas_encontradas.append(cita)
-
-    if not citas_encontradas:
-        return (
-            f"No existen citas registradas para el "
-            f"**{fecha_buscada.strftime('%d/%m/%Y')}**."
-        )
-
-    lineas = []
-
-    for cita in citas_encontradas:
-        fecha = (
-            cita.get("fecha_cita")
-            or cita.get("fecha")
-            or "No registrada"
-        )
-
-        hora = (
-            cita.get("hora_cita")
-            or cita.get("hora")
-            or cita.get("fecha_hora")
-            or "No registrada"
-        )
-
-        motivo = (
-            cita.get("motivo")
-            or cita.get("descripcion")
-            or cita.get("servicio")
-            or "No registrado"
-        )
-
-        estado = (
-            cita.get("estado")
-            or "No registrado"
-        )
-
-        lineas.append(
-            f"- **{fecha} {hora}** — "
-            f"{motivo} — Estado: {estado}."
-        )
-
-    return (
-        f"Se encontraron **{len(citas_encontradas)} "
-        f"citas** para el "
-        f"**{fecha_buscada.strftime('%d/%m/%Y')}**:\n\n"
-        + "\n".join(lineas)
+    return f"Citas para el **{fecha.strftime('%d/%m/%Y')}**:\n\n" + "\n".join(
+        f"- **{cita.get('hora_cita') or 'Sin hora'}** — "
+        f"{cita.get('placa') or 'Sin placa'} — "
+        f"{cita.get('tipo_servicio') or cita.get('motivo') or 'Sin servicio'}."
+        for cita in encontradas
     )
 
 
-# =========================================================
-# CONSULTAS DE VEHÍCULOS
-# =========================================================
+def consultar_bd(pregunta):
+    datos = cargar_datos()
 
-def responder_vehiculos(
-    datos: dict,
-    pregunta: str,
-):
-    texto = normalizar_texto(pregunta)
-
-    if (
-        "vehiculo" not in texto
-        and "placa" not in texto
-    ):
-        return None
-
-    vehiculos = datos["vehiculos"]
-
-    patron_placa = re.search(
-        r"\b[A-Z]{2,3}[-\s]?\d{3,4}\b",
-        pregunta.upper(),
-    )
-
-    if not patron_placa:
-        return None
-
-    placa_buscada = (
-        patron_placa.group(0)
-        .replace("-", "")
-        .replace(" ", "")
-        .upper()
-    )
-
-    for vehiculo in vehiculos:
-        placa = str(
-            vehiculo.get("placa")
-            or ""
-        )
-
-        placa_normalizada = (
-            placa
-            .replace("-", "")
-            .replace(" ", "")
-            .upper()
-        )
-
-        if placa_normalizada == placa_buscada:
-            cliente = (
-                vehiculo.get("clientes")
-                or {}
-            )
-
-            nombre_cliente = obtener_nombre_persona(
-                cliente
-            )
-
-            return (
-                f"### Vehículo {placa}\n\n"
-                f"- **Marca:** "
-                f"{vehiculo.get('marca') or 'No registrada'}\n"
-                f"- **Modelo:** "
-                f"{vehiculo.get('modelo') or 'No registrado'}\n"
-                f"- **Año:** "
-                f"{vehiculo.get('anio') or 'No registrado'}\n"
-                f"- **Kilometraje:** "
-                f"{vehiculo.get('kilometraje') or 0} km\n"
-                f"- **Cliente:** {nombre_cliente}\n"
-                f"- **Estado:** "
-                f"{'Activo' if vehiculo.get('activo', True) else 'Inactivo'}"
-            )
-
-    return (
-        f"No se encontró un vehículo con la placa "
-        f"**{patron_placa.group(0)}**."
-    )
-
-
-# =========================================================
-# DETECTOR DE CONSULTAS DE LA BASE DE DATOS
-# =========================================================
-
-def consultar_base_de_datos(
-    pregunta: str,
-):
-    datos = cargar_datos_taller()
-
-    funciones = [
+    for funcion in [
         responder_cantidades,
+        responder_vehiculos,
         responder_tecnicos,
         responder_ordenes,
         responder_citas,
-        responder_vehiculos,
-    ]
-
-    for funcion in funciones:
-        respuesta = funcion(
-            datos,
-            pregunta,
-        )
-
+    ]:
+        respuesta = funcion(datos, pregunta)
         if respuesta:
             return respuesta
 
     return None
 
 
-# =========================================================
-# ASISTENTE TÉCNICO DE OPENROUTER
-# =========================================================
+def parece_consulta_sistema(pregunta):
+    texto = normalizar(pregunta)
+    datos = cargar_datos()
 
-INSTRUCCIONES_IA = """
-Eres el asistente técnico virtual del taller automotriz
-Doctor Fierros.
+    marcas = [
+        normalizar(v.get("marca", ""))
+        for v in datos["vehiculos"]
+        if v.get("marca")
+    ]
+    modelos = [
+        normalizar(v.get("modelo", ""))
+        for v in datos["vehiculos"]
+        if v.get("modelo")
+    ]
 
-Responde siempre en español, con lenguaje profesional,
-claro y comprensible.
-
-Puedes ayudar con:
-
-- mantenimiento preventivo;
-- mantenimiento correctivo;
-- diagnóstico inicial;
-- códigos OBD-II;
-- frenos;
-- suspensión;
-- dirección;
-- motor;
-- transmisión;
-- electricidad automotriz;
-- atención posventa;
-- redacción de observaciones técnicas.
-
-Cuando se describa una falla, responde con:
-
-1. Resumen del problema.
-2. Posibles causas.
-3. Pruebas recomendadas.
-4. Herramientas necesarias.
-5. Nivel de urgencia.
-6. Recomendación final.
-
-No confirmes que una pieza está dañada sin inspección,
-mediciones o pruebas técnicas.
-
-Si existe riesgo para la seguridad, indica claramente
-que el vehículo no debería circular.
-
-No inventes clientes, técnicos, vehículos, citas ni
-órdenes de trabajo.
-"""
-
-
-def consultar_ia_tecnica(
-    pregunta: str,
-    historial: list,
-) -> str:
-    if cliente_ia is None:
-        return (
-            "La consulta no coincide con una función de la "
-            "base de datos y la clave OPENROUTER_API_KEY no "
-            "está configurada correctamente."
+    return (
+        contiene(
+            texto,
+            [
+                "taller", "cliente", "vehiculo", "carro", "auto", "tecnico",
+                "orden", "cita", "registrado", "tenemos", "placa", "marca",
+                "modelo", "kilometraje", "propietario",
+            ],
         )
+        or any(marca in texto for marca in marcas)
+        or any(modelo in texto for modelo in modelos)
+    )
+
+
+try:
+    cliente_ia = OpenAI(
+        api_key=st.secrets["OPENROUTER_API_KEY"],
+        base_url="https://openrouter.ai/api/v1",
+    )
+except Exception:
+    cliente_ia = None
+
+
+def consultar_ia(pregunta, historial):
+    if cliente_ia is None:
+        return "OPENROUTER_API_KEY no está configurada correctamente."
 
     mensajes = [
         {
             "role": "system",
-            "content": INSTRUCCIONES_IA,
+            "content": (
+                "Eres un asistente técnico automotriz. Responde en español. "
+                "No inventes datos del taller ni de Supabase."
+            ),
         }
     ]
-
-    mensajes.extend(
-        historial[-10:]
-    )
-
-    mensajes.append(
-        {
-            "role": "user",
-            "content": pregunta,
-        }
-    )
+    mensajes.extend(historial[-8:])
+    mensajes.append({"role": "user", "content": pregunta})
 
     try:
-        respuesta = (
-            cliente_ia
-            .chat
-            .completions
-            .create(
-                model="openrouter/free",
-                messages=mensajes,
-                temperature=0.3,
-                max_tokens=800,
-            )
+        respuesta = cliente_ia.chat.completions.create(
+            model="openrouter/free",
+            messages=mensajes,
+            temperature=0.3,
+            max_tokens=700,
         )
-
-        texto = (
-            respuesta
-            .choices[0]
-            .message
-            .content
-        )
-
-        return (
-            texto
-            or "El modelo no produjo una respuesta."
-        )
-
+        return respuesta.choices[0].message.content or "Sin respuesta."
     except Exception as error:
-        detalle = str(error)
+        return f"No fue posible consultar OpenRouter: {error}"
 
-        if "401" in detalle:
-            return (
-                "La clave de OpenRouter no es válida o "
-                "no está configurada correctamente."
-            )
-
-        if "429" in detalle:
-            return (
-                "El servicio gratuito alcanzó temporalmente "
-                "su límite. Espera unos minutos e intenta "
-                "nuevamente."
-            )
-
-        return (
-            "No fue posible consultar el asistente IA.\n\n"
-            f"Detalle técnico: {detalle}"
-        )
-
-
-# =========================================================
-# HISTORIAL DEL CHAT
-# =========================================================
 
 if "historial_ia" not in st.session_state:
     st.session_state.historial_ia = [
         {
             "role": "assistant",
             "content": (
-                "Hola. Soy el asistente inteligente del taller "
-                "Doctor Fierros. Puedo consultar información de "
-                "Supabase y responder preguntas técnicas."
+                "Hola. Puedo consultar datos reales del taller y responder "
+                "preguntas técnicas automotrices."
             ),
         }
     ]
 
+col1, col2 = st.columns([5, 1])
 
-# =========================================================
-# BOTONES
-# =========================================================
-
-columna_1, columna_2 = st.columns(
-    [5, 1]
-)
-
-with columna_2:
-    if st.button(
-        "🗑️ Limpiar chat",
-        use_container_width=True,
-    ):
-        st.session_state.historial_ia = [
-            {
-                "role": "assistant",
-                "content": (
-                    "La conversación fue reiniciada. "
-                    "Escribe una nueva consulta."
-                ),
-            }
-        ]
-
+with col2:
+    if st.button("🗑️ Limpiar", use_container_width=True):
+        st.session_state.historial_ia = []
         st.rerun()
 
-
-if st.button(
-    "🔄 Actualizar datos de Supabase",
-):
+if st.button("🔄 Actualizar datos"):
     st.cache_data.clear()
-    st.success(
-        "Los datos fueron actualizados."
-    )
-    st.rerun()
+    st.success("Datos actualizados.")
 
-
-# =========================================================
-# PREGUNTAS SUGERIDAS
-# =========================================================
-
-with st.expander(
-    "💡 Preguntas para probar"
-):
+with st.expander("💡 Preguntas para probar"):
     st.markdown(
         """
-        **Consultas de la base de datos**
-
-        - ¿Cuántos clientes hay registrados?
-        - ¿Cuántos técnicos trabajan en el taller?
-        - ¿Quién es el técnico con más órdenes asignadas?
-        - ¿Qué técnico tiene menor carga de trabajo?
-        - ¿Qué técnicos trabajan en el taller?
-        - ¿Cuántas órdenes están pendientes?
-        - ¿Cuántas órdenes están en proceso?
-        - ¿Cuántas órdenes están sin técnico?
-        - Muéstrame la orden OT-00001.
-        - ¿Qué citas existen para mañana?
-        - ¿Qué información existe del vehículo ABC-1234?
-
-        **Consultas técnicas**
-
-        - ¿Qué significa el código P0300?
-        - ¿Qué se debe revisar si un vehículo vibra al frenar?
-        - ¿Qué mantenimiento corresponde a los 80 000 km?
-        - Redacta una recomendación por desgaste de pastillas.
+- ¿Cuántos Chevrolet hay registrados?
+- ¿Qué vehículos son Toyota?
+- ¿Cuántos vehículos hay por marca?
+- ¿Cuál es la marca más frecuente?
+- ¿Cuál es el vehículo con mayor kilometraje?
+- ¿Cuál es el vehículo más antiguo?
+- ¿Qué vehículos son del año 2020?
+- ¿Qué vehículos son de color negro?
+- Muéstrame la información del vehículo PBC-2145.
+- ¿Quién es el propietario del vehículo PBC-2145?
+- ¿Quién es el técnico con más órdenes?
+- ¿Cuántas órdenes están pendientes?
+- ¿Qué citas hay para mañana?
         """
     )
 
-
-# =========================================================
-# MOSTRAR HISTORIAL
-# =========================================================
-
 for mensaje in st.session_state.historial_ia:
-    with st.chat_message(
-        mensaje["role"]
-    ):
-        st.markdown(
-            mensaje["content"]
-        )
+    with st.chat_message(mensaje["role"]):
+        st.markdown(mensaje["content"])
 
-
-# =========================================================
-# ENTRADA DEL USUARIO
-# =========================================================
-
-pregunta = st.chat_input(
-    "Escribe una consulta sobre el taller "
-    "o sobre mecánica automotriz..."
-)
-
+pregunta = st.chat_input("Escribe tu consulta...")
 
 if pregunta:
-    historial_anterior = (
-        st.session_state
-        .historial_ia
-        .copy()
-    )
-
-    st.session_state.historial_ia.append(
-        {
-            "role": "user",
-            "content": pregunta,
-        }
-    )
+    historial_anterior = st.session_state.historial_ia.copy()
+    st.session_state.historial_ia.append({"role": "user", "content": pregunta})
 
     with st.chat_message("user"):
         st.markdown(pregunta)
 
     with st.chat_message("assistant"):
-        with st.spinner(
-            "Consultando información..."
-        ):
-            respuesta_bd = (
-                consultar_base_de_datos(
-                    pregunta
-                )
-            )
+        with st.spinner("Consultando..."):
+            respuesta = consultar_bd(pregunta)
 
-            if respuesta_bd:
-                respuesta_final = respuesta_bd
-
-            else:
-                respuesta_final = (
-                    consultar_ia_tecnica(
-                        pregunta,
-                        historial_anterior,
-                    )
+            if not respuesta and parece_consulta_sistema(pregunta):
+                respuesta = (
+                    "La pregunta parece referirse a datos del taller, pero no "
+                    "pude identificarla. Prueba indicando vehículo, marca, placa, "
+                    "técnico, orden o cita."
                 )
 
-        st.markdown(
-            respuesta_final
-        )
+            if not respuesta:
+                respuesta = consultar_ia(pregunta, historial_anterior)
+
+        st.markdown(respuesta)
 
     st.session_state.historial_ia.append(
-        {
-            "role": "assistant",
-            "content": respuesta_final,
-        }
+        {"role": "assistant", "content": respuesta}
     )
